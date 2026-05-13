@@ -1,0 +1,62 @@
+{
+  "_help_edit": "This is the committed-to-git template. Secrets (cookie, password) live in GitHub Secrets and are injected at runtime by build_config.py. Edit dates / preferences / locations here directly; the GHA workflow picks up the next change on the next 5-min tick.",
+
+  "dates": [
+    "2026-05-16",
+    "2026-05-17",
+    "2026-05-23",
+    "2026-05-24"
+  ],
+
+  "preferences": {
+    "timeStart": "10:00",
+    "timeEnd":   "22:00",
+    "courts": []
+  },
+
+  "venues": [
+    {
+      "name": "Crystal Sports",
+      "type": "crystal_sports",
+      "enabled": true,
+      "cookie": "REPLACE_WITH_PHPSESSID",
+      "locations": [
+        { "locId": "LOC001", "stadiumId": "1",  "_name": "North-1" },
+        { "locId": "LOC001", "stadiumId": "2",  "_name": "North-2" },
+        { "locId": "LOC001", "stadiumId": "3",  "_name": "North-3" },
+        { "locId": "LOC001", "stadiumId": "4",  "_name": "Center-2" },
+        { "locId": "LOC001", "stadiumId": "5",  "_name": "Center-1" },
+        { "locId": "LOC001", "stadiumId": "6",  "_name": "South-1" },
+        { "locId": "LOC001", "stadiumId": "7",  "_name": "South-2" },
+        { "locId": "LOC001", "stadiumId": "8",  "_name": "South-3" },
+
+        { "locId": "LOC002", "stadiumId": "18", "_name": "G North-1" },
+        { "locId": "LOC002", "stadiumId": "19", "_name": "G North-2" },
+        { "locId": "LOC002", "stadiumId": "20", "_name": "G North-3" },
+        { "locId": "LOC002", "stadiumId": "21", "_name": "G Center-1" },
+        { "locId": "LOC002", "stadiumId": "22", "_name": "G Center-2" },
+        { "locId": "LOC002", "stadiumId": "23", "_name": "G Center-3" },
+        { "locId": "LOC002", "stadiumId": "24", "_name": "G South-1" },
+        { "locId": "LOC002", "stadiumId": "25", "_name": "G South-2" },
+        { "locId": "LOC002", "stadiumId": "26", "_name": "G South-3" }
+      ]
+    },
+    {
+      "name": "Cozy Tennis",
+      "type": "cozy_tennis",
+      "enabled": true,
+      "courts": []
+    }
+  ],
+
+  "email": {
+    "from": "sasara.1412@gmail.com",
+    "password": "REPLACE_WITH_GMAIL_APP_PASSWORD",
+    "to": "sasara.1412@gmail.com",
+    "smtpHost": "smtp.gmail.com",
+    "smtpPort": 465
+  },
+
+  "debug": false,
+  "suppressErrorEmail": false
+}

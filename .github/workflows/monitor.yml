@@ -1,0 +1,63 @@
+name: Tennis Court Monitor
+
+on:
+  schedule:
+    # Every 5 minutes (UTC). GitHub-scheduled crons can drift 1-5 minutes
+    # under load; that's fine for this use case.
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}   # allow manual trigger from Actions tab
+
+# Required so the workflow can commit state.json back after each run.
+permissions:
+  contents: write
+
+concurrency:
+  group: tennis-monitor
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Render config from secrets
+        env:
+          PHPSESSID:          ${{ secrets.PHPSESSID }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          EMAIL_FROM:         ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:           ${{ secrets.EMAIL_TO }}
+        run: python build_config.py
+
+      - name: Run monitor
+        run: python monitor.py
+
+      - name: Commit state if changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Never commit anything except state.json
+          if [ -f state.json ]; then
+            git add state.json
+          fi
+          if ! git diff --staged --quiet; then
+            git commit -m "state: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            # Retry push a few times in case of a concurrent commit
+            for i in 1 2 3; do
+              if git push; then break; fi
+              git pull --rebase
+              sleep 2
+            done
+          else
+            echo "No state change."
+          fi

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd config: run monitor.py every 5 minutes (300 seconds).
+
+  Install:
+    cp ~/Documents/claude/notify_available_tennis_court/com.user.crystal-monitor.plist ~/Library/LaunchAgents/
+    launchctl load   ~/Library/LaunchAgents/com.user.crystal-monitor.plist
+    launchctl start  com.user.crystal-monitor       # run immediately once
+
+  Stop / remove:
+    launchctl unload ~/Library/LaunchAgents/com.user.crystal-monitor.plist
+
+  Logs (in addition to monitor.log in the script folder):
+    ~/Documents/claude/notify_available_tennis_court/launchd.stdout.log
+    ~/Documents/claude/notify_available_tennis_court/launchd.stderr.log
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.crystal-monitor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/sirisub.am/crystal-monitor/monitor.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/sirisub.am/crystal-monitor</string>
+
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/sirisub.am/crystal-monitor/launchd.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/sirisub.am/crystal-monitor/launchd.stderr.log</string>
+</dict>
+</plist>

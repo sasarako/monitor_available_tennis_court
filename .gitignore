@@ -1,0 +1,15 @@
+# Local config — has secrets. GHA renders this from config.template.json + secrets at runtime.
+config.json
+
+# Runtime artifacts
+*.log
+last_response.json
+launchd.stdout.log
+launchd.stderr.log
+
+# macOS / editor cruft
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+.env
