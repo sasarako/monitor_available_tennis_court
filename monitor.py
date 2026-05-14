@@ -52,6 +52,10 @@ CRYSTAL_BOOKING_URL = "https://crystalsports-booking.kegroup.co.th/booking.php"
 COZY_API_URL = "https://schedule.cozytennis.com/wp-admin/admin-ajax.php"
 COZY_PAGE_URL = "https://schedule.cozytennis.com/?pd"
 
+# --- Talent Sport Academy endpoints ---
+TALENT_API_BASE = "https://backend.talentsportacademy.com/api/v1"
+TALENT_BOOKING_BASE = "https://booking.talentsportacademy.com"
+
 WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 UA = (
@@ -335,11 +339,101 @@ def cozy_available(venue_cfg: dict, target_date: str, prefs: dict,
     return available
 
 
+# ========= Talent Sport Academy =========
+
+def talent_fetch_raw(token: str, sport_id: str, target_date: str) -> dict:
+    """GET availability for one sport on one date. Returns the JSON payload."""
+    # Tolerate the user pasting the full "Bearer eyJ..." Authorization header.
+    t = token.strip()
+    if t.lower().startswith("bearer "):
+        t = t[7:].strip()
+    url = f"{TALENT_API_BASE}/site-sports/{sport_id}/court?date={target_date}"
+    req = request.Request(
+        url,
+        headers={
+            "Accept": "application/json, text/plain, */*",
+            "Authorization": f"Bearer {t}",
+            "Locale": "en",
+            "Origin": TALENT_BOOKING_BASE,
+            "Referer": TALENT_BOOKING_BASE + "/",
+            "User-Agent": UA,
+        },
+        method="GET",
+    )
+    with request.urlopen(req, timeout=20) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def talent_available(venue_cfg: dict, target_date: str, prefs: dict,
+                     raw_dumps: dict | None = None) -> list[dict]:
+    """Return available 1-hour slots for Talent Sport Academy on target_date.
+
+    The API returns one entry per court, with `availableTime` as a dict of
+    "HH:00" -> value. Value is a NUMBER (= price, slot is available) or the
+    string "CONFIRMED" (= already booked). Other strings could exist; we treat
+    "any non-numeric value = unavailable" defensively.
+    """
+    token = (venue_cfg.get("token") or "").strip()
+    sport_id = venue_cfg.get("sportId", "").strip()
+    site_id = venue_cfg.get("siteId", "4102").strip()
+    if not token or not sport_id:
+        return []
+
+    data = talent_fetch_raw(token, sport_id, target_date)
+    if raw_dumps is not None:
+        raw_dumps[f"{target_date} {venue_cfg['name']}"] = data
+
+    status = data.get("statusResponse", {}).get("statusCode")
+    if status and status != 200:
+        return []
+
+    courts = (data.get("data") or {}).get("court") or []
+    courts_filter = prefs.get("courts") or venue_cfg.get("courts") or None
+    window_start = normalize_time(prefs["timeStart"])
+    window_end = normalize_time(prefs["timeEnd"])
+
+    booking_url = (
+        f"{TALENT_BOOKING_BASE}/en/book/site/{site_id}/court"
+        f"?sportId={sport_id}&date={target_date}"
+    )
+
+    available = []
+    for court in courts:
+        court_name = court.get("courtName") or court.get("courtCode") or "?"
+        if courts_filter and court_name not in courts_filter:
+            continue
+        slots = court.get("availableTime") or {}
+        for raw_time, value in slots.items():
+            # number = price (available); anything else (str like "CONFIRMED") = booked
+            if not isinstance(value, (int, float)):
+                continue
+            t = normalize_time(raw_time)
+            if not t or not (window_start <= t <= window_end):
+                continue
+            try:
+                h = int(t.split(":")[0])
+                end_time = f"{(h + 1) % 24:02d}:00"
+            except (ValueError, IndexError):
+                end_time = ""
+            available.append({
+                "venue": venue_cfg["name"],
+                "date": target_date,
+                "court": court_name,
+                "time": t,
+                "timeEnd": end_time,
+                "location": venue_cfg["name"],
+                "price": str(int(value)),
+                "bookingUrl": booking_url,
+            })
+    return available
+
+
 # ========= Venue dispatch =========
 
 VENUE_HANDLERS = {
     "crystal_sports": crystal_available,
     "cozy_tennis":    cozy_available,
+    "talent_sport":   talent_available,
 }
 
 
@@ -579,24 +673,31 @@ def run(dump: bool = False) -> int:
             log(traceback.format_exc())
             return 1
 
-    # --- cookie-expired alert (Crystal Sports only) ---
+    # --- auth-expired alert (Crystal Sports cookie / Talent Sport JWT) ---
+    AUTH_VENUE_TYPES = {"crystal_sports", "talent_sport"}
+    SECRET_FIELD = {
+        "crystal_sports": "PHPSESSID cookie",
+        "talent_sport":   "TALENT_TOKEN (JWT)",
+    }
     for venue in venues:
-        if venue["type"] != "crystal_sports":
+        if venue["type"] not in AUTH_VENUE_TYPES:
             continue
         attempts = attempts_by_venue.get(venue["name"], 0)
         failures = failures_by_venue.get(venue["name"], 0)
-        flag = f"__cookie_expired__|{venue['name']}"
+        flag = f"__auth_expired__|{venue['name']}"
         if attempts and failures == attempts and not cfg.get("suppressErrorEmail"):
-            log(f"{venue['name']}: all requests failed — cookie may have expired.")
+            secret = SECRET_FIELD.get(venue["type"], "auth credential")
+            log(f"{venue['name']}: all requests failed — {secret} may have expired.")
             if flag not in notified:
                 try:
                     errs = [m for v, m in fetch_errors if v["name"] == venue["name"]]
                     send_email(
                         cfg["email"],
-                        f"Tennis monitor: {venue['name']} session expired",
-                        f"All requests to {venue['name']} failed. The PHPSESSID "
-                        f"cookie has likely expired — log in to the booking site "
-                        f"again and update config.json.\n\n" + "\n".join(errs[:20]),
+                        f"Tennis monitor: {venue['name']} auth expired",
+                        f"All requests to {venue['name']} failed. The {secret} "
+                        f"has likely expired — refresh it and update "
+                        f"config.json (local) or the secret in GitHub Settings "
+                        f"(cloud).\n\n" + "\n".join(errs[:20]),
                     )
                     notified.add(flag)
                     state["notified"] = sorted(notified)[-3000:]

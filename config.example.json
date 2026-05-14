@@ -44,6 +44,15 @@
       "type": "cozy_tennis",
       "enabled": true,
       "courts": []
+    },
+    {
+      "name": "Talent Sport Academy",
+      "type": "talent_sport",
+      "enabled": true,
+      "token": "PASTE_JWT_FROM_AUTHORIZATION_HEADER",
+      "siteId": "4102",
+      "sportId": "287357a0-7374-445b-b9cb-35bd2ea40a35",
+      "courts": []
     }
   ],
 

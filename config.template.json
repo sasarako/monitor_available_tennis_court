@@ -47,13 +47,22 @@
       "type": "cozy_tennis",
       "enabled": true,
       "courts": []
+    },
+    {
+      "name": "Talent Sport Academy",
+      "type": "talent_sport",
+      "enabled": true,
+      "token": "REPLACE_WITH_TALENT_TOKEN",
+      "siteId": "4102",
+      "sportId": "287357a0-7374-445b-b9cb-35bd2ea40a35",
+      "courts": []
     }
   ],
 
   "email": {
-    "from": "sasara.1412@gmail.com",
+    "from":     "REPLACE_WITH_EMAIL_FROM",
     "password": "REPLACE_WITH_GMAIL_APP_PASSWORD",
-    "to": "sasara.1412@gmail.com",
+    "to":       "REPLACE_WITH_EMAIL_TO",
     "smtpHost": "smtp.gmail.com",
     "smtpPort": 465
   },

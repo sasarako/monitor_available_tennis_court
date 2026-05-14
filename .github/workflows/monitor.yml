@@ -34,6 +34,7 @@ jobs:
       - name: Render config from secrets
         env:
           PHPSESSID:          ${{ secrets.PHPSESSID }}
+          TALENT_TOKEN:       ${{ secrets.TALENT_TOKEN }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           EMAIL_FROM:         ${{ secrets.EMAIL_FROM }}
           EMAIL_TO:           ${{ secrets.EMAIL_TO }}

@@ -48,6 +48,19 @@ def main() -> int:
                 n += 1
         print(f"Injected PHPSESSID into {n} crystal_sports venue(s).")
 
+    talent_token = env("TALENT_TOKEN")
+    if talent_token:
+        # The user may copy the Authorization header verbatim, including the
+        # "Bearer " prefix — strip it so the JWT alone ends up in config.
+        if talent_token.lower().startswith("bearer "):
+            talent_token = talent_token[7:].strip()
+        n = 0
+        for v in cfg.get("venues", []):
+            if v.get("type") == "talent_sport":
+                v["token"] = talent_token
+                n += 1
+        print(f"Injected TALENT_TOKEN into {n} talent_sport venue(s).")
+
     if env("GMAIL_APP_PASSWORD"):
         cfg.setdefault("email", {})["password"] = env("GMAIL_APP_PASSWORD")
         print("Injected GMAIL_APP_PASSWORD into email.password.")
@@ -62,8 +75,16 @@ def main() -> int:
     missing = []
     if "REPLACE_WITH_PHPSESSID" in blob:
         missing.append("PHPSESSID")
+    if "REPLACE_WITH_TALENT_TOKEN" in blob:
+        if any(v.get("type") == "talent_sport" and v.get("enabled", True)
+               for v in cfg.get("venues", [])):
+            missing.append("TALENT_TOKEN")
     if "REPLACE_WITH_GMAIL_APP_PASSWORD" in blob:
         missing.append("GMAIL_APP_PASSWORD")
+    if "REPLACE_WITH_EMAIL_FROM" in blob:
+        missing.append("EMAIL_FROM")
+    if "REPLACE_WITH_EMAIL_TO" in blob:
+        missing.append("EMAIL_TO")
     if missing:
         print(f"ERROR: secrets not provided: {', '.join(missing)}", file=sys.stderr)
         return 1
