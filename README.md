@@ -10,21 +10,6 @@ Polls multiple Bangkok tennis booking systems every 5 minutes and emails you the
 
 Adding a new venue means writing one fetcher function in `monitor.py` and registering it in `VENUE_HANDLERS`.
 
-## TL;DR
-
-```sh
-# Local launchd
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.crystal-monitor.plist   # start
-launchctl bootout   gui/$(id -u)/com.user.crystal-monitor                                 # stop
-launchctl kickstart -k gui/$(id -u)/com.user.crystal-monitor                              # force run now
-
-# Script (from ~/crystal-monitor/)
-python3 monitor.py              # full run, emails if new matches
-python3 monitor.py --show       # list currently-open slots, no email
-python3 monitor.py --test-email # SMTP smoke test
-python3 monitor.py --discover   # probe Crystal Sports stadiumIds 1-60
-python3 monitor.py --dump       # save raw API responses to last_response.json
-```
 
 ## What it does
 
