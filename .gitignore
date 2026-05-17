@@ -7,6 +7,9 @@ last_response.json
 launchd.stdout.log
 launchd.stderr.log
 
+# Probe script with real tokens pasted in — never commit
+probe_talent_refresh_real.py
+
 # macOS / editor cruft
 .DS_Store
 __pycache__/

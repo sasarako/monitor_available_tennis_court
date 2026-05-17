@@ -216,11 +216,34 @@ The local launchd job only runs while your Mac is awake. To poll continuously ev
 | --- | --- |
 | Change dates / time / courts / enable / disable | Pencil-edit `config.template.json` in the GitHub web UI → commit. Next run picks it up. |
 | Refresh Crystal Sports cookie | Settings → Secrets → `PHPSESSID` → Update. No commit. |
-| Refresh Talent Sport JWT (daily) | Settings → Secrets → `TALENT_TOKEN` → Update. No commit. |
+| Refresh Talent Sport JWT (daily) | Easiest: copy fresh JWT → `./refresh_talent_token.sh` (see below). Or Settings → Secrets → `TALENT_TOKEN` → Update. |
 | Stop monitoring | Actions tab → workflow → kebab menu → **Disable workflow**. |
 | Restart | Same menu → **Enable workflow**. |
 | Run immediately | Actions tab → workflow → **Run workflow**. |
 | Reset notification state | Edit `state.json` in repo → set `{"notified": []}` → commit. One fresh email next run. |
+
+### One-command Talent JWT refresh (`refresh_talent_token.sh`)
+
+Talent Sport's JWT expires every ~24h and their architecture requires a human re-auth (LINE SSO + OTP) to mint a new one — there's no automatable refresh. The helper script makes the manual step ~10 seconds:
+
+**One-time setup:**
+
+```bash
+brew install gh        # if not installed
+gh auth login          # GitHub.com → HTTPS → browser
+```
+
+**Each day (or whenever you get the "auth expired" email):**
+
+1. Log into <https://booking.talentsportacademy.com>
+2. DevTools → Application → Local Storage → copy the JWT (or grab it from any XHR's `Authorization` header — leading `Bearer ` is fine, the script strips it)
+3. Run:
+
+   ```bash
+   ~/crystal-monitor/refresh_talent_token.sh
+   ```
+
+The script reads the clipboard, sanity-checks it's a JWT, prints when it expires, and updates the `TALENT_TOKEN` GitHub Secret. The next cron tick (within 5 min) uses the new token automatically — no commit, no Settings UI clicks.
 
 ### Trade-offs vs. local launchd
 
