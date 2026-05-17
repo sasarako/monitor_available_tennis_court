@@ -138,7 +138,12 @@ def expand_dates(cfg: dict) -> list[str]:
 # ========= Crystal Sports =========
 
 def crystal_fetch_raw(cookie: str, target_date: str, stadium_id, loc_id: str) -> list:
-    """POST to Crystal Sports API. Returns flat list of slot dicts (one per court×hour)."""
+    """POST to Crystal Sports API. Returns flat list of slot dicts (one per court×hour).
+
+    Empty body → returns [] (date is outside the booking window the site allows).
+    Non-JSON body (e.g. an HTML login page) → raises RuntimeError so the cookie-
+    expired alert can trigger upstream.
+    """
     payload = json.dumps({
         "date": target_date,
         "stadiumId": str(stadium_id),
@@ -159,7 +164,20 @@ def crystal_fetch_raw(cookie: str, target_date: str, stadium_id, loc_id: str) ->
         method="POST",
     )
     with request.urlopen(req, timeout=20) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+        raw = resp.read().decode("utf-8", errors="replace").strip()
+    if not raw:
+        # Empty body = date outside booking window. Not an error.
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        snippet = raw[:120].replace("\n", " ")
+        # Looks like an HTML/login page or some other non-JSON body — most
+        # likely the PHPSESSID cookie has expired.
+        raise RuntimeError(
+            f"non-JSON response from Crystal Sports "
+            f"(cookie may be expired): {snippet!r}"
+        )
     if not isinstance(data, list):
         if isinstance(data, dict) and isinstance(data.get("data"), list):
             return data["data"]
