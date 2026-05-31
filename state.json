@@ -139,6 +139,7 @@
     "Crystal Sports|2026-05-30|South-2|12:00",
     "Crystal Sports|2026-05-30|South-2|13:00",
     "Crystal Sports|2026-05-30|South-2|14:00",
+    "Crystal Sports|2026-05-31|Center-2|17:00",
     "Crystal Sports|2026-05-31|G North-2|18:00",
     "Talent Sport Academy|2026-05-16|Court 1|11:00",
     "Talent Sport Academy|2026-05-16|Court 1|12:00",
@@ -214,7 +215,6 @@
     "Talent Sport Academy|2026-05-24|Court 2|15:00",
     "Talent Sport Academy|2026-05-24|Court 2|16:00",
     "Talent Sport Academy|2026-05-24|Court 2|22:00",
-    "__auth_expired__|Crystal Sports",
     "__auth_expired__|Talent Sport Academy"
   ]
 }
