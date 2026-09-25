@@ -474,6 +474,57 @@ def get_venues(cfg: dict) -> list[dict]:
     return []
 
 
+# ========= Config validation =========
+
+# Values that config.example.json / config.template.json ship with. If any of
+# these survive into config.json the credential was never filled in, and every
+# request built from it fails in a way that looks like an expired secret
+# (SMTP 535, Crystal 'illegal session id', Talent 401) rather than a config bug.
+PLACEHOLDER_PREFIXES = ("PASTE_YOUR_", "REPLACE_WITH_")
+
+# Per venue type: (config field, human name of the secret to refresh).
+VENUE_SECRETS = {
+    "crystal_sports": ("cookie", "PHPSESSID cookie"),
+    "talent_sport":   ("token", "TALENT_TOKEN (JWT)"),
+}
+
+
+def is_placeholder(value) -> bool:
+    return isinstance(value, str) and value.strip().startswith(PLACEHOLDER_PREFIXES)
+
+
+def find_placeholders(cfg: dict, need_email: bool, need_venues: bool) -> list[str]:
+    """Return human-readable descriptions of unfilled credentials in cfg.
+
+    Only checks what the current command actually needs, so --show still works
+    with a valid cookie but an unconfigured mailbox.
+    """
+    missing = []
+
+    if need_email:
+        cfg_email = cfg.get("email", {})
+        for field in ("from", "to", "password"):
+            if is_placeholder(cfg_email.get(field)):
+                missing.append(f"email.{field}")
+
+    if need_venues:
+        for venue in get_venues(cfg):
+            field, label = VENUE_SECRETS.get(venue.get("type"), (None, None))
+            if field and is_placeholder(venue.get(field)):
+                missing.append(f"venue '{venue.get('name')}' -> {field} ({label})")
+
+    return missing
+
+
+def report_placeholders(missing: list[str]) -> None:
+    log(f"Config not filled in — {len(missing)} placeholder value(s) in {CONFIG_PATH}:")
+    for item in missing:
+        log(f"  - {item}")
+    log("Refresh these credentials and edit config.json directly, or export the "
+        "secrets (EMAIL_FROM, EMAIL_TO, GMAIL_APP_PASSWORD, PHPSESSID, "
+        "TALENT_TOKEN) and run: python3 build_config.py")
+
+
 def is_cookie_error(venue: dict, err: Exception) -> bool:
     """Heuristic: crystal_sports HTTPError 401/403 suggests cookie expired."""
     if venue.get("type") != "crystal_sports":
@@ -748,6 +799,16 @@ def main() -> int:
         log(f"Config missing: copy config.example.json -> {CONFIG_PATH}")
         return 2
     cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+
+    # Fail fast on unfilled credentials: without this every scheduled run
+    # hammers the venue APIs and Gmail, then logs a traceback that reads like
+    # an expired secret instead of an unconfigured one.
+    need_email = args.test_email or not (args.show or args.discover)
+    need_venues = not args.test_email
+    missing = find_placeholders(cfg, need_email=need_email, need_venues=need_venues)
+    if missing:
+        report_placeholders(missing)
+        return 2
 
     if args.test_email:
         try:

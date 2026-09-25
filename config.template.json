@@ -1,18 +1,11 @@
 {
   "_help_edit": "This is the committed-to-git template. Secrets (cookie, password) live in GitHub Secrets and are injected at runtime by build_config.py. Edit dates / preferences / locations here directly; the GHA workflow picks up the next change on the next 5-min tick.",
 
-  "dates": [
-    "2026-05-24",
-    "2026-05-25",
-    "2026-05-26",
-    "2026-05-28",
-    "2026-05-30",
-    "2026-05-31"
-  ],
+  "daysAhead": 7,
 
   "preferences": {
     "timeStart": "10:00",
-    "timeEnd":   "18:00",
+    "timeEnd":   "20:00",
     "courts": []
   },
 
@@ -52,7 +45,7 @@
     {
       "name": "Talent Sport Academy",
       "type": "talent_sport",
-      "enabled": true,
+      "enabled": false,
       "token": "REPLACE_WITH_TALENT_TOKEN",
       "siteId": "4102",
       "sportId": "287357a0-7374-445b-b9cb-35bd2ea40a35",
