@@ -116,11 +116,13 @@ def normalize_time(s) -> str:
 def expand_dates(cfg: dict) -> list[str]:
     """Build the list of dates to check.
 
-    1. cfg["dates"]                — explicit list, used as-is
+    1. cfg["dates"]                — explicit list, used as-is. Entries are
+       "YYYY-MM-DD" or {"date": ..., "timeStart": ..., "timeEnd": ...} to
+       override the preferences window for that date.
     2. cfg["daysAhead"] (+ weekdays filter) — generate next N days
     """
     if cfg.get("dates"):
-        return list(cfg["dates"])
+        return [d["date"] if isinstance(d, dict) else d for d in cfg["dates"]]
     days = int(cfg.get("daysAhead", 14))
     weekdays = cfg.get("weekdays")
     if weekdays:
@@ -133,6 +135,26 @@ def expand_dates(cfg: dict) -> list[str]:
             continue
         out.append(d.isoformat())
     return out
+
+
+def prefs_for_date(cfg: dict, target_date: str) -> dict:
+    """Preferences for one date: global preferences + any per-date override."""
+    prefs = dict(cfg["preferences"])
+    for d in cfg.get("dates") or []:
+        if isinstance(d, dict) and d.get("date") == target_date:
+            prefs.update({k: v for k, v in d.items() if k != "date"})
+    return prefs
+
+
+def describe_window(cfg: dict) -> str:
+    """"10:00-20:00", or per-date windows when they differ."""
+    windows = {d: "{}-{}".format(normalize_time(p["timeStart"]),
+                                 normalize_time(p["timeEnd"]))
+               for d in expand_dates(cfg)
+               for p in [prefs_for_date(cfg, d)]}
+    if len(set(windows.values())) <= 1:
+        return next(iter(windows.values()), "")
+    return ", ".join(f"{w} on {d}" for d, w in windows.items())
 
 
 # ========= Crystal Sports =========
@@ -581,7 +603,6 @@ def collect_matches(cfg: dict, raw_dumps: dict | None = None
     """
     venues = get_venues(cfg)
     dates = expand_dates(cfg)
-    prefs = cfg["preferences"]
 
     by_venue: dict[str, list[dict]] = defaultdict(list)
     attempts_by_venue: dict[str, int] = defaultdict(int)
@@ -596,7 +617,8 @@ def collect_matches(cfg: dict, raw_dumps: dict | None = None
         for target_date in dates:
             attempts_by_venue[venue["name"]] += 1
             try:
-                matches = handler(venue, target_date, prefs, raw_dumps)
+                matches = handler(venue, target_date,
+                                  prefs_for_date(cfg, target_date), raw_dumps)
             except Exception as e:  # noqa: BLE001
                 failures_by_venue[venue["name"]] += 1
                 errors.append((venue, f"{target_date}: {e}"))
@@ -612,8 +634,7 @@ def show_available(cfg: dict, dump: bool = False) -> int:
     raw_dumps: dict[str, object] = {}
     by_venue, _, _, _ = collect_matches(cfg, raw_dumps)
 
-    prefs = cfg["preferences"]
-    window = f"{normalize_time(prefs['timeStart'])}-{normalize_time(prefs['timeEnd'])}"
+    window = describe_window(cfg)
     total = sum(len(v) for v in by_venue.values())
 
     if dump:
@@ -652,7 +673,6 @@ def run(dump: bool = False) -> int:
         return 2
 
     dates = expand_dates(cfg)
-    prefs = cfg["preferences"]
 
     by_venue: dict[str, list[dict]] = defaultdict(list)        # all available now
     new_by_venue: dict[str, list[dict]] = defaultdict(list)    # not yet notified
@@ -669,7 +689,8 @@ def run(dump: bool = False) -> int:
         for target_date in dates:
             attempts_by_venue[venue["name"]] += 1
             try:
-                matches = handler(venue, target_date, prefs, raw_dumps)
+                matches = handler(venue, target_date,
+                                  prefs_for_date(cfg, target_date), raw_dumps)
             except Exception as e:  # noqa: BLE001
                 failures_by_venue[venue["name"]] += 1
                 fetch_errors.append((venue, f"{target_date}: {e}"))
@@ -687,7 +708,7 @@ def run(dump: bool = False) -> int:
         log(f"Dumped raw responses -> {DUMP_PATH}")
 
     # --- per-venue summary (one log line each) ---
-    window = f"{normalize_time(prefs['timeStart'])}-{normalize_time(prefs['timeEnd'])}"
+    window = describe_window(cfg)
     total_available = sum(len(v) for v in by_venue.values())
     total_new = sum(len(v) for v in new_by_venue.values())
 

@@ -1,7 +1,11 @@
 {
   "_help_edit": "This is the committed-to-git template. Secrets (cookie, password) live in GitHub Secrets and are injected at runtime by build_config.py. Edit dates / preferences / locations here directly; the GHA workflow picks up the next change on the next 5-min tick.",
 
-  "dates": ["2026-10-03", "2026-10-04"],
+  "dates": [
+    "2026-10-04",
+    { "date": "2026-10-06", "timeStart": "20:00", "timeEnd": "21:00" },
+    { "date": "2026-10-07", "timeStart": "20:00", "timeEnd": "21:00" }
+  ],
 
   "preferences": {
     "timeStart": "10:00",
