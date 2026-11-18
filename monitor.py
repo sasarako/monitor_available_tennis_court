@@ -4,7 +4,7 @@
 Polls each configured venue's API on a schedule and emails when slots
 matching your preferences open up. Currently supports:
 
-  - "crystal_sports"  (Crystal Sports Bangkok — needs PHPSESSID cookie)
+  - "crystal_sports"  (Crystal Sports Bangkok — needs cs.member login cookie)
   - "cozy_tennis"     (Cozy Tennis — public, no auth)
 
 State is persisted in state.json so you don't get duplicate alerts.
@@ -14,7 +14,7 @@ Modes
 -----
     python3 monitor.py                # one normal check
     python3 monitor.py --dump         # check + dump raw responses to last_response.json
-    python3 monitor.py --discover     # probe Crystal Sports stadiumIds (Crystal-only)
+    python3 monitor.py --discover     # show Crystal Sports hours/courts for tomorrow
     python3 monitor.py --test-email   # send a test email and exit
     python3 monitor.py --show         # print currently-available slots, no email
 
@@ -28,9 +28,11 @@ import json
 import smtplib
 import ssl
 import sys
+import time
 import traceback
+import re
 from collections import defaultdict
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from email.message import EmailMessage
 from pathlib import Path
 from urllib import request, error, parse as urlparse
@@ -42,11 +44,15 @@ LOG_PATH = SCRIPT_DIR / "monitor.log"
 DUMP_PATH = SCRIPT_DIR / "last_response.json"
 
 # --- Crystal Sports endpoints ---
-CRYSTAL_API_URL = (
-    "https://crystalsports-booking.kegroup.co.th"
-    "/api_helper.php?action=getAvailableStadiums"
-)
-CRYSTAL_BOOKING_URL = "https://crystalsports-booking.kegroup.co.th/booking.php"
+# Site was rebuilt (Nov 2026) as server-rendered ASP.NET. Availability lives in
+# the HTML of GET /booking?date=..&loc=..&time=N (time=0 = hour grid only,
+# time=N = grid + court map for the Nth hour). Auth = the `cs.member` cookie.
+CRYSTAL_BASE = "https://crystalsports-booking.kegroup.co.th"
+CRYSTAL_BOOKING_URL = f"{CRYSTAL_BASE}/booking"
+CRYSTAL_DEFAULT_LOCATIONS = [
+    {"locId": "LOC001", "courtPrefix": ""},
+    {"locId": "LOC002", "courtPrefix": "G "},
+]
 
 # --- Cozy Tennis endpoints ---
 COZY_API_URL = "https://schedule.cozytennis.com/wp-admin/admin-ajax.php"
@@ -113,6 +119,16 @@ def normalize_time(s) -> str:
     return s[:5]
 
 
+def local_now(cfg: dict) -> datetime:
+    """Current time in the venues' timezone (GitHub runners are UTC)."""
+    tz_name = cfg.get("timezone", "Asia/Bangkok")
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:  # noqa: BLE001 — no tzdata: assume Bangkok (UTC+7)
+        return datetime.now(timezone(timedelta(hours=7)))
+
+
 def expand_dates(cfg: dict) -> list[str]:
     """Build the list of dates to check.
 
@@ -128,7 +144,7 @@ def expand_dates(cfg: dict) -> list[str]:
     if weekdays:
         weekdays = {w.title() for w in weekdays}
     out = []
-    today = date.today()
+    today = local_now(cfg).date()
     for i in range(days + 1):
         d = today + timedelta(days=i)
         if weekdays and WEEKDAY_NAMES[d.weekday()] not in weekdays:
@@ -143,6 +159,13 @@ def prefs_for_date(cfg: dict, target_date: str) -> dict:
     for d in cfg.get("dates") or []:
         if isinstance(d, dict) and d.get("date") == target_date:
             prefs.update({k: v for k, v in d.items() if k != "date"})
+    # Never alert on a slot that has already started: for today, the window
+    # opens one minute after "now" (slot times compare as zero-padded HH:MM).
+    now = local_now(cfg)
+    if target_date == now.date().isoformat():
+        cutoff = (now + timedelta(minutes=1)).strftime("%H:%M")
+        if cutoff > normalize_time(prefs["timeStart"]):
+            prefs["timeStart"] = cutoff
     return prefs
 
 
@@ -159,57 +182,96 @@ def describe_window(cfg: dict) -> str:
 
 # ========= Crystal Sports =========
 
-def crystal_fetch_raw(cookie: str, target_date: str, stadium_id, loc_id: str) -> list:
-    """POST to Crystal Sports API. Returns flat list of slot dicts (one per court×hour).
+class CrystalAuthError(RuntimeError):
+    """Raised when Crystal Sports bounces us to the login page."""
 
-    Empty body → returns [] (date is outside the booking window the site allows).
-    Non-JSON body (e.g. an HTML login page) → raises RuntimeError so the cookie-
-    expired alert can trigger upstream.
-    """
-    payload = json.dumps({
-        "date": target_date,
-        "stadiumId": str(stadium_id),
-        "locId": loc_id,
-    }).encode("utf-8")
-    req = request.Request(
-        CRYSTAL_API_URL,
-        data=payload,
-        headers={
-            "Content-Type": "application/json; charset=UTF-8",
-            "Accept": "*/*",
-            "Cookie": f"PHPSESSID={cookie}",
-            "Referer": CRYSTAL_BOOKING_URL,
-            "Origin": "https://crystalsports-booking.kegroup.co.th",
-            "X-Requested-With": "XMLHttpRequest",
-            "User-Agent": UA,
-        },
-        method="POST",
-    )
+
+def crystal_cookie_header(cookie: str) -> str:
+    """Accept either a full Cookie header ('a=b; cs.member=...') or the bare
+    cs.member value, and return a Cookie header string."""
+    cookie = (cookie or "").strip()
+    if cookie.lower().startswith("cookie:"):
+        cookie = cookie[7:].strip()
+    return cookie if "=" in cookie else f"cs.member={cookie}"
+
+
+def crystal_fetch_page(cookie: str, target_date: str, loc_id: str,
+                       time_idx: int = 0) -> str:
+    """GET the booking page HTML. Raises CrystalAuthError if not logged in."""
+    url = (f"{CRYSTAL_BOOKING_URL}?date={target_date}&loc={loc_id}"
+           f"&time={time_idx}&sel=")
+    req = request.Request(url, headers={
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "th-TH,th;q=0.9,en;q=0.8",
+        "Cookie": crystal_cookie_header(cookie),
+        "Referer": CRYSTAL_BOOKING_URL,
+        "User-Agent": UA,
+    })
     with request.urlopen(req, timeout=20) as resp:
-        raw = resp.read().decode("utf-8", errors="replace").strip()
-    if not raw:
-        # Empty body = date outside booking window. Not an error.
-        return []
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        snippet = raw[:120].replace("\n", " ")
-        # Looks like an HTML/login page or some other non-JSON body — most
-        # likely the PHPSESSID cookie has expired.
-        raise RuntimeError(
-            f"non-JSON response from Crystal Sports "
-            f"(cookie may be expired): {snippet!r}"
-        )
-    if not isinstance(data, list):
-        if isinstance(data, dict) and isinstance(data.get("data"), list):
-            return data["data"]
-        return []
-    return data
+        final_url = resp.geturl()
+        html = resp.read().decode("utf-8", errors="replace")
+    if "/account/login" in final_url or 'action="/account/login"' in html:
+        raise CrystalAuthError(
+            "redirected to login page — Crystal Sports cookie (cs.member) "
+            "has expired")
+    time.sleep(0.3)  # be polite; the old site rate-limited us (HTTP 429)
+    return html
 
 
-def crystal_is_available(slot: dict) -> bool:
-    """reservestatus: '0' = open, '1' = reserved."""
-    return str(slot.get("reservestatus", "")).strip() == "0"
+_CRYSTAL_SLOT_RE = re.compile(
+    r'<a class="slot([^"]*)"(?P<attrs>[^>]*)>\s*'
+    r'<span class="slot-time">(?P<time>[^<]+)</span>\s*'
+    r'<span class="slot-meta">(?P<meta>[^<]*)</span>', re.S)
+_CRYSTAL_COURT_RE = re.compile(
+    r'<a class="court-tile(?P<cls>[^"]*)"(?P<attrs>[^>]*)>.*?'
+    r'<span class="court-name">(?P<name>[^<]+)</span>', re.S)
+
+
+def crystal_parse_hours(html: str) -> list[dict]:
+    """Hour grid -> [{time, open, timeIdx}] (timeIdx None when full)."""
+    hours = []
+    for m in _CRYSTAL_SLOT_RE.finditer(html):
+        idx = re.search(r"[?&;]time=(\d+)", m.group("attrs"))
+        is_open = "is-disabled" not in m.group(1) and bool(idx)
+        hours.append({
+            "time": normalize_time(m.group("time").strip()),
+            "meta": m.group("meta").strip(),
+            "open": is_open,
+            "timeIdx": int(idx.group(1)) if idx else None,
+        })
+    return hours
+
+
+def crystal_parse_courts(html: str) -> tuple[list[str], str, str, str]:
+    """Court map -> (free court names, location name, timeEnd, price)."""
+    i = html.find('id="step-court"')
+    section = html[i:] if i >= 0 else ""
+    free = [m.group("name").strip()
+            for m in _CRYSTAL_COURT_RE.finditer(section)
+            if "is-disabled" not in m.group("cls")]
+    loc = re.search(r'choice-card is-selected[^>]*>.*?'
+                    r'<span class="choice-title">([^<]+)</span>', html, re.S)
+    hdr = re.search(r"(\d{1,2}:\d{2})\s*[–-]\s*(\d{1,2}:\d{2})\s*·\s*฿([\d,.]+)",
+                    section)
+    return (free,
+            loc.group(1).strip() if loc else "",
+            normalize_time(hdr.group(2)) if hdr else "",
+            hdr.group(3).replace(",", "") if hdr else "?")
+
+
+def crystal_locations(venue_cfg: dict) -> list[dict]:
+    """Unique locIds from config (old configs listed one entry per court)."""
+    seen, out = set(), []
+    for loc in venue_cfg.get("locations") or CRYSTAL_DEFAULT_LOCATIONS:
+        lid = loc.get("locId")
+        if not lid or lid in seen:
+            continue
+        seen.add(lid)
+        prefix = loc.get("courtPrefix")
+        if prefix is None:
+            prefix = "G " if lid == "LOC002" else ""
+        out.append({"locId": lid, "courtPrefix": prefix})
+    return out
 
 
 def crystal_available(venue_cfg: dict, target_date: str, prefs: dict,
@@ -221,74 +283,56 @@ def crystal_available(venue_cfg: dict, target_date: str, prefs: dict,
     courts_filter = prefs.get("courts") or None
 
     available = []
-    for loc in venue_cfg.get("locations", []):
-        label = (f"{target_date} {venue_cfg['name']} "
-                 f"{loc['locId']} stadium={loc['stadiumId']}")
-        slots = crystal_fetch_raw(cookie, target_date,
-                                   loc["stadiumId"], loc["locId"])
+    for loc in crystal_locations(venue_cfg):
+        loc_id, prefix = loc["locId"], loc["courtPrefix"]
+        hours = crystal_parse_hours(crystal_fetch_page(cookie, target_date, loc_id))
         if raw_dumps is not None:
-            raw_dumps[label] = slots
-
-        for slot in slots:
-            if not isinstance(slot, dict):
+            raw_dumps[f"{target_date} {venue_cfg['name']} {loc_id} hours"] = hours
+        for h in hours:
+            if not h["open"] or not (window_start <= h["time"] <= window_end):
                 continue
-            if not crystal_is_available(slot):
-                continue
-            court = slot.get("stadiumName") or "?"
-            if courts_filter and court not in courts_filter:
-                continue
-            t = normalize_time(slot.get("timeName") or slot.get("timeStart"))
-            if not t or not (window_start <= t <= window_end):
-                continue
-            available.append({
-                "venue": venue_cfg["name"],
-                "date": target_date,
-                "court": court,
-                "time": t,
-                "timeEnd": normalize_time(slot.get("timeEnd")),
-                "location": slot.get("locName", ""),
-                "price": str(slot.get("stadiumtimePrice", ""))
-                            .rstrip("0").rstrip(".") or "?",
-                "bookingUrl": CRYSTAL_BOOKING_URL,
-            })
+            html = crystal_fetch_page(cookie, target_date, loc_id, h["timeIdx"])
+            free, loc_name, time_end, price = crystal_parse_courts(html)
+            if raw_dumps is not None:
+                raw_dumps[f"{target_date} {venue_cfg['name']} {loc_id} {h['time']}"] = free
+            for name in free:
+                # G-branch courts are already named "G North-1" etc.
+                court = name if name.startswith(prefix) else f"{prefix}{name}"
+                if courts_filter and court not in courts_filter:
+                    continue
+                available.append({
+                    "venue": venue_cfg["name"],
+                    "date": target_date,
+                    "court": court,
+                    "time": h["time"],
+                    "timeEnd": time_end,
+                    "location": loc_name,
+                    "price": price,
+                    "bookingUrl": (f"{CRYSTAL_BOOKING_URL}?date={target_date}"
+                                   f"&loc={loc_id}&time={h['timeIdx']}"),
+                })
     return available
 
 
-def crystal_discover(cfg: dict, max_id: int = 60) -> None:
-    """Probe stadiumIds across both Crystal Sports locIds."""
+def crystal_discover(cfg: dict) -> None:
+    """Print each Crystal location's hour grid and courts for tomorrow."""
     cv = next((v for v in cfg.get("venues", [])
                if v.get("type") == "crystal_sports"), None)
     if not cv:
         print("No crystal_sports venue in config.")
         return
-    cookie = cv.get("cookie", "")
     probe_date = (date.today() + timedelta(days=1)).isoformat()
-    loc_ids = sorted({l["locId"] for l in cv.get("locations", [])}
-                     | {"LOC001", "LOC002"})
-
-    found: dict[str, list[dict]] = {loc: [] for loc in loc_ids}
-    log(f"Probing stadiumIds 1..{max_id} on {probe_date} for {loc_ids}")
-    for loc in loc_ids:
-        for sid in range(1, max_id + 1):
-            try:
-                slots = crystal_fetch_raw(cookie, probe_date, sid, loc)
-            except Exception as e:  # noqa: BLE001
-                log(f"  loc={loc} sid={sid}: error {e}")
-                continue
-            if slots:
-                names = sorted({s.get("stadiumName", "?") for s in slots})
-                loc_names = sorted({s.get("locName", "?") for s in slots})
-                print(f"  loc={loc}  stadiumId={sid:>3}  "
-                      f"court={','.join(names)}  "
-                      f"({','.join(loc_names)})  slots={len(slots)}")
-                found[loc].append({
-                    "locId": loc,
-                    "stadiumId": str(sid),
-                    "_name": ",".join(names),
-                })
-    print("\nSuggested locations block:")
-    flat = [item for items in found.values() for item in items]
-    print(json.dumps(flat, indent=2, ensure_ascii=False))
+    for loc in crystal_locations(cv):
+        hours = crystal_parse_hours(crystal_fetch_page(cv["cookie"], probe_date,
+                                                       loc["locId"]))
+        print(f"{loc['locId']} on {probe_date}: "
+              + ", ".join(f"{h['time']}({h['meta']})" for h in hours))
+        first = next((h for h in hours if h["open"]), None)
+        if first:
+            html = crystal_fetch_page(cv["cookie"], probe_date, loc["locId"],
+                                      first["timeIdx"])
+            free, name, _, price = crystal_parse_courts(html)
+            print(f"  {name} @ {first['time']} free courts: {free} (฿{price})")
 
 
 # ========= Cozy Tennis =========
@@ -506,7 +550,7 @@ PLACEHOLDER_PREFIXES = ("PASTE_YOUR_", "REPLACE_WITH_")
 
 # Per venue type: (config field, human name of the secret to refresh).
 VENUE_SECRETS = {
-    "crystal_sports": ("cookie", "PHPSESSID cookie"),
+    "crystal_sports": ("cookie", "CRYSTAL_COOKIE (cs.member)"),
     "talent_sport":   ("token", "TALENT_TOKEN (JWT)"),
 }
 
@@ -543,7 +587,7 @@ def report_placeholders(missing: list[str]) -> None:
     for item in missing:
         log(f"  - {item}")
     log("Refresh these credentials and edit config.json directly, or export the "
-        "secrets (EMAIL_FROM, EMAIL_TO, GMAIL_APP_PASSWORD, PHPSESSID, "
+        "secrets (EMAIL_FROM, EMAIL_TO, GMAIL_APP_PASSWORD, CRYSTAL_COOKIE, "
         "TALENT_TOKEN) and run: python3 build_config.py")
 
 
@@ -766,7 +810,7 @@ def run(dump: bool = False) -> int:
     # --- auth-expired alert (Crystal Sports cookie / Talent Sport JWT) ---
     AUTH_VENUE_TYPES = {"crystal_sports", "talent_sport"}
     SECRET_FIELD = {
-        "crystal_sports": "PHPSESSID cookie",
+        "crystal_sports": "CRYSTAL_COOKIE (cs.member cookie)",
         "talent_sport":   "TALENT_TOKEN (JWT)",
     }
     for venue in venues:
@@ -809,7 +853,7 @@ def main() -> int:
     parser.add_argument("--dump", action="store_true",
                         help="Save raw API responses to last_response.json")
     parser.add_argument("--discover", action="store_true",
-                        help="Probe Crystal Sports stadiumIds.")
+                        help="Show Crystal Sports hour grid + courts for tomorrow.")
     parser.add_argument("--show", action="store_true",
                         help="Print available slots without sending email.")
     parser.add_argument("--test-email", action="store_true",

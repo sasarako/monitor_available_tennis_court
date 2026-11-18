@@ -4,7 +4,7 @@ Polls multiple Bangkok tennis booking systems every 5 minutes and emails you the
 
 **Currently supports:**
 
-- **Crystal Sports** (17 courts: 8 normal + 9 G) — needs a `PHPSESSID` cookie. Cookie typically lasts days.
+- **Crystal Sports** (17 courts: 8 normal + 9 G) — needs the `cs.member` login cookie (new site, Nov 2026). Login lasts ~5 weeks, but logging in again elsewhere can end it.
 - **Cozy Tennis** (4 courts) — public, no auth.
 - **Talent Sport Academy** (2 tennis courts) — needs a JWT bearer token. **Expires ~24h, refresh daily.**
 
@@ -46,15 +46,15 @@ The monitor only emails when something **changes** since the last run. For each 
 
 ```jsonc
 {
-  "dates": ["2026-05-16", "2026-05-17"],
+  "daysAhead": 14, "weekdays": ["Sat", "Sun"], "timezone": "Asia/Bangkok",
   "preferences": { "timeStart": "10:00", "timeEnd": "22:00", "courts": [] },
   "venues": [
     {
       "name": "Crystal Sports",
       "type": "crystal_sports",
       "enabled": true,
-      "cookie": "PHPSESSID_VALUE",
-      "locations": [{ "locId": "LOC001", "stadiumId": "1", "_name": "North-1" }, ...]
+      "cookie": "CS_MEMBER_COOKIE_VALUE",
+      "locations": [{ "locId": "LOC001", "courtPrefix": "" }, { "locId": "LOC002", "courtPrefix": "G " }]
     },
     {
       "name": "Cozy Tennis",
@@ -86,7 +86,7 @@ To **disable a venue** without removing it, set its `"enabled": false`.
 | `config.json` | Local settings with secrets. **Gitignored.** Read by local launchd. |
 | `config.template.json` | Committed config with `REPLACE_WITH_*` placeholders. GHA renders `config.json` from this + secrets. |
 | `config.example.json` | Reference template for setting up fresh. |
-| `build_config.py` | Reads template + env vars (`PHPSESSID`, `TALENT_TOKEN`, `GMAIL_APP_PASSWORD`, `EMAIL_FROM`, `EMAIL_TO`) → writes `config.json` at GHA runtime. |
+| `build_config.py` | Reads template + env vars (`CRYSTAL_COOKIE`, `TALENT_TOKEN`, `GMAIL_APP_PASSWORD`, `EMAIL_FROM`, `EMAIL_TO`) → writes `config.json` at GHA runtime. |
 | `com.user.crystal-monitor.plist` | macOS launchd config that runs `monitor.py` every 5 min. |
 | `.github/workflows/monitor.yml` | GHA cron workflow. Builds config from secrets, runs monitor, commits state back. |
 | `state.json` | Notified-slot ledger. Auto-committed by GHA after each run with changes. |
@@ -108,7 +108,7 @@ To **disable a venue** without removing it, set its `"enabled": false`.
 
 | Venue | Where | What to copy |
 | --- | --- | --- |
-| Crystal Sports | DevTools → Application → Cookies @ `crystalsports-booking.kegroup.co.th` | Value of `PHPSESSID` |
+| Crystal Sports | DevTools → Application → Cookies @ `crystalsports-booking.kegroup.co.th` | Value of `cs.member` |
 | Talent Sport Academy | DevTools → Network → any XHR to `backend.talentsportacademy.com` → Request Headers | Value of `authorization` (with or without `Bearer ` prefix — both work) |
 | Gmail SMTP | https://myaccount.google.com/apppasswords | 16-char app password |
 
@@ -164,7 +164,7 @@ Everything lives in `config.json` locally (or `config.template.json` for GHA + s
 | Time window | `preferences.timeStart` / `preferences.timeEnd` (24h `HH:MM`, inclusive) |
 | Court whitelist | `preferences.courts` (`[]` = any, or `["G North-1", ...]`) |
 | Email recipient | `email.to` (comma-separated for multiple) |
-| Crystal Sports cookie | `venues[*].cookie` for the Crystal venue (or the `PHPSESSID` GitHub secret) |
+| Crystal Sports cookie | `venues[*].cookie` for the Crystal venue (or the `CRYSTAL_COOKIE` GitHub secret) |
 | Talent Sport JWT | `venues[*].token` for the Talent venue (or the `TALENT_TOKEN` GitHub secret) |
 
 ### Auto-rolling dates
@@ -202,7 +202,7 @@ The local launchd job only runs while your Mac is awake. To poll continuously ev
 
    | Name | Value |
    | --- | --- |
-   | `PHPSESSID` | Crystal Sports cookie. Refresh when you get a "session expired" email. |
+   | `CRYSTAL_COOKIE` | Crystal Sports `cs.member` cookie. Refresh when you get a "session expired" email. |
    | `TALENT_TOKEN` | Talent Sport Academy JWT (with or without `Bearer ` prefix). **Refresh ~daily.** |
    | `GMAIL_APP_PASSWORD` | Gmail 16-char app password. |
    | `EMAIL_FROM` | Sender Gmail address. |
@@ -215,7 +215,7 @@ The local launchd job only runs while your Mac is awake. To poll continuously ev
 | Task | How |
 | --- | --- |
 | Change dates / time / courts / enable / disable | Pencil-edit `config.template.json` in the GitHub web UI → commit. Next run picks it up. |
-| Refresh Crystal Sports cookie | Settings → Secrets → `PHPSESSID` → Update. No commit. |
+| Refresh Crystal Sports cookie | Settings → Secrets → `CRYSTAL_COOKIE` → Update. No commit. |
 | Refresh Talent Sport JWT (daily) | Easiest: copy fresh JWT → `./refresh_talent_token.sh` (see below). Or Settings → Secrets → `TALENT_TOKEN` → Update. |
 | Stop monitoring | Actions tab → workflow → kebab menu → **Disable workflow**. |
 | Restart | Same menu → **Enable workflow**. |
@@ -276,7 +276,7 @@ macOS sandbox blocks launchd-spawned processes from reading `~/Documents`, `~/De
 
 Cookie or JWT expired. Refresh:
 
-- Crystal Sports: log in → DevTools → copy new `PHPSESSID` → paste into `config.json` or the `PHPSESSID` secret.
+- Crystal Sports: log in → DevTools → copy new `cs.member` → paste into `config.json` or the `CRYSTAL_COOKIE` secret.
 - Talent Sport: log in → DevTools → copy new `Authorization` header → paste into `config.json` or the `TALENT_TOKEN` secret.
 
 No restart needed; the script picks up the new value on the next tick.
@@ -315,7 +315,7 @@ Writes `last_response.json` with full raw responses for each venue × date.
 
 ## How it works (one-line summary per venue)
 
-- **Crystal Sports**: `POST api_helper.php?action=getAvailableStadiums` per `(date, stadiumId, locId)` triple, JSON body, `PHPSESSID` cookie. Response is a flat list of slot dicts where `reservestatus: "0"` = available, `"1"` = booked.
+- **Crystal Sports** (rebuilt Nov 2026, server-rendered ASP.NET): `GET /booking?date=YYYY-MM-DD&loc=LOC001|LOC002&time=N` with the `cs.member` cookie. `time=0` returns the hour grid (`a.slot`, `is-disabled` = full, free hours link `time=N`); `time=N` adds the court map (`a.court-tile`, `is-disabled` = booked). A redirect to `/account/login` means the cookie expired. Slots for today that already started are skipped (Bangkok time).
 - **Cozy Tennis**: `POST wp-admin/admin-ajax.php` with `action=tc_load_date&date=...`, no auth. Response lists *booked* events per court; availability = absence of booking in the hour grid.
 - **Talent Sport Academy**: `GET api/v1/site-sports/{sportId}/court?date=...`, JWT bearer auth. Response has per-court `availableTime` map where a numeric value = price (available), a string `"CONFIRMED"` = booked.
 

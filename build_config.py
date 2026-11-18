@@ -5,13 +5,15 @@ Used by the GitHub Actions workflow so that the cookie and Gmail app password
 live in GitHub Secrets, never in the committed repo.
 
 Environment variables consumed:
-  PHPSESSID          -> injected into every crystal_sports venue's "cookie"
+  CRYSTAL_COOKIE     -> injected into every crystal_sports venue's "cookie"
+                        (cs.member cookie value, or a full Cookie header;
+                        legacy PHPSESSID is accepted as a fallback name)
   GMAIL_APP_PASSWORD -> injected into email.password
   EMAIL_FROM         -> optional override for email.from
   EMAIL_TO           -> optional override for email.to
 
 If a variable is unset, the corresponding template value is kept as-is.
-Fails loudly if PHPSESSID or GMAIL_APP_PASSWORD ends up unset AND the template
+Fails loudly if CRYSTAL_COOKIE or GMAIL_APP_PASSWORD ends up unset AND the template
 still has placeholder values like 'REPLACE_WITH_...'.
 """
 
@@ -39,14 +41,14 @@ def main() -> int:
 
     cfg = json.loads(TEMPLATE.read_text(encoding="utf-8"))
 
-    cookie = env("PHPSESSID")
+    cookie = env("CRYSTAL_COOKIE") or env("PHPSESSID")
     if cookie:
         n = 0
         for v in cfg.get("venues", []):
             if v.get("type") == "crystal_sports":
                 v["cookie"] = cookie
                 n += 1
-        print(f"Injected PHPSESSID into {n} crystal_sports venue(s).")
+        print(f"Injected CRYSTAL_COOKIE into {n} crystal_sports venue(s).")
 
     talent_token = env("TALENT_TOKEN")
     if talent_token:
@@ -73,8 +75,8 @@ def main() -> int:
     # Sanity check — fail loudly if the resulting config still has placeholders.
     blob = json.dumps(cfg)
     missing = []
-    if "REPLACE_WITH_PHPSESSID" in blob:
-        missing.append("PHPSESSID")
+    if "REPLACE_WITH_CRYSTAL_COOKIE" in blob or "REPLACE_WITH_PHPSESSID" in blob:
+        missing.append("CRYSTAL_COOKIE")
     if "REPLACE_WITH_TALENT_TOKEN" in blob:
         if any(v.get("type") == "talent_sport" and v.get("enabled", True)
                for v in cfg.get("venues", [])):
